@@ -1,0 +1,39 @@
+/* Force Calendar Component Styles */
+
+.calendar-wrapper {
+    position: relative;
+    min-height: 400px;
+}
+
+.calendar-container {
+    position: relative;
+    width: 100%;
+    min-height: 600px;
+}
+
+/* Ensure the calendar fills its container */
+.calendar-container force-calendar {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+/* Loading spinner overlay */
+.calendar-wrapper lightning-spinner {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 9999;
+}
+
+/* Error message styling */
+.slds-theme_alert-texture {
+    border: 1px solid #c23934;
+    background-color: #fef1f1;
+}
+
+/* Refresh button positioning */
+.slds-text-align_right {
+    text-align: right;
+}
