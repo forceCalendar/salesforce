@@ -1,0 +1,76 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [ master, main ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ master, main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+
+    - name: Install root dependencies
+      run: npm install
+
+    - name: Install src dependencies
+      run: cd src && npm install
+
+    - name: Build distribution
+      run: npm run build
+
+    - name: Create deployment package
+      run: |
+        cd dist
+        zip -r ../forcecalendar-salesforce-dist.zip .
+        cd ..
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: dist-package
+        path: dist/
+
+    - name: Upload deployment zip
+      uses: actions/upload-artifact@v4
+      with:
+        name: deployment-zip
+        path: forcecalendar-salesforce-dist.zip
+
+    # Create release on tags
+    - name: Create Release
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          forcecalendar-salesforce-dist.zip
+        body: |
+          ## ForceCalendar for Salesforce
+
+          ### 🚀 Quick Deploy
+          Download `forcecalendar-salesforce-dist.zip` and extract, then:
+          ```bash
+          cd forcecalendar-salesforce-dist
+          sf project deploy start
+          ```
+
+          No npm required! Everything is pre-bundled.
+
+          ### What's New
+          - Built from @forcecalendar/core and @forcecalendar/interface
+          - Ready to deploy to Salesforce
+          - Includes all dependencies
+
+        generate_release_notes: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

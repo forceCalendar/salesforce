@@ -1,0 +1,31 @@
+# Salesforce cache
+.sf/
+.sfdx/
+.localdevserver/
+deploy-options.json
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Tests
+coverage/
+.nyc_output/
+
+# Build output
+dist/
+*.zip
+
+# Node modules at root (for build tools)
+/node_modules/
+
+# Keep src/node_modules for development
