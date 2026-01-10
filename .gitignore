@@ -25,7 +25,6 @@ coverage/
 dist/
 *.zip
 
-# Node modules at root (for build tools)
-/node_modules/
-
-# Keep src/node_modules for development
+# Node modules
+node_modules/
+src/node_modules/

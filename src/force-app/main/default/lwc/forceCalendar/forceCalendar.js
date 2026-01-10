@@ -4,6 +4,9 @@ import { ShowToastEvent } from 'lightning/platformShowToastEvent';
 
 // Import Apex methods
 import getEvents from '@salesforce/apex/ForceCalendarController.getEvents';
+import createEvent from '@salesforce/apex/ForceCalendarController.createEvent';
+import updateEvent from '@salesforce/apex/ForceCalendarController.updateEvent';
+import deleteEvent from '@salesforce/apex/ForceCalendarController.deleteEvent';
 
 // Import the calendar interface library
 import '@forcecalendar/interface';
@@ -50,14 +53,14 @@ export default class ForceCalendarLwc extends LightningElement {
 
             // Pass events to the calendar
             if (this.calendarElement) {
-                // Clear existing events first (if method exists)
-                if (typeof this.calendarElement.clearEvents === 'function') {
-                    this.calendarElement.clearEvents();
-                } else if (typeof this.calendarElement.removeAllEvents === 'function') {
-                    this.calendarElement.removeAllEvents();
-                } else {
-                    // If no clear method, set events array directly
-                    this.calendarElement.events = [];
+                // Clear existing events by deleting each one
+                const existingEvents = this.calendarElement.getEvents ? this.calendarElement.getEvents() : [];
+                if (existingEvents && existingEvents.length > 0) {
+                    existingEvents.forEach(evt => {
+                        if (this.calendarElement.deleteEvent) {
+                            this.calendarElement.deleteEvent(evt.id);
+                        }
+                    });
                 }
 
                 // Add all events from Salesforce
@@ -69,8 +72,7 @@ export default class ForceCalendarLwc extends LightningElement {
                         end: new Date(event.end),
                         allDay: event.allDay || false,
                         description: event.description || '',
-                        backgroundColor: event.backgroundColor || '#0176D3',
-                        borderColor: event.backgroundColor || '#0176D3'
+                        color: event.backgroundColor || '#0176D3'
                     });
                 });
 
@@ -251,43 +253,115 @@ export default class ForceCalendarLwc extends LightningElement {
         }
     }
 
-    // Handle event creation (placeholder - needs Apex method)
+    // Handle event creation
     handleEventCreate(detail) {
         console.log('Event creation requested:', detail);
+        this.isLoading = true;
 
-        this.dispatchEvent(
-            new ShowToastEvent({
-                title: 'Event Creation',
-                message: 'Event creation not yet implemented. Add createEvent Apex method.',
-                variant: 'info'
+        const eventData = detail.event || detail;
+        const startDt = eventData.start ? new Date(eventData.start) : new Date();
+        const endDt = eventData.end ? new Date(eventData.end) : new Date(startDt.getTime() + 60 * 60 * 1000);
+
+        createEvent({
+            title: eventData.title || 'New Event',
+            startDateTime: startDt.toISOString(),
+            endDateTime: endDt.toISOString(),
+            isAllDay: eventData.allDay || false,
+            description: eventData.description || ''
+        })
+            .then(eventId => {
+                this.dispatchEvent(
+                    new ShowToastEvent({
+                        title: 'Success',
+                        message: 'Event created successfully',
+                        variant: 'success'
+                    })
+                );
+                return refreshApex(this.wiredEventResult);
             })
-        );
+            .catch(error => {
+                this.dispatchEvent(
+                    new ShowToastEvent({
+                        title: 'Error creating event',
+                        message: error.body ? error.body.message : error.message,
+                        variant: 'error'
+                    })
+                );
+            })
+            .finally(() => {
+                this.isLoading = false;
+            });
     }
 
-    // Handle event updates (placeholder - needs Apex method)
+    // Handle event updates
     handleEventUpdate(detail) {
         console.log('Event update requested:', detail);
+        this.isLoading = true;
 
-        this.dispatchEvent(
-            new ShowToastEvent({
-                title: 'Event Update',
-                message: 'Event update not yet implemented. Add updateEvent Apex method.',
-                variant: 'info'
+        const eventData = detail.event || detail;
+
+        updateEvent({
+            eventId: eventData.id,
+            title: eventData.title,
+            startDateTime: eventData.start ? new Date(eventData.start).toISOString() : null,
+            endDateTime: eventData.end ? new Date(eventData.end).toISOString() : null,
+            isAllDay: eventData.allDay,
+            description: eventData.description
+        })
+            .then(() => {
+                this.dispatchEvent(
+                    new ShowToastEvent({
+                        title: 'Success',
+                        message: 'Event updated successfully',
+                        variant: 'success'
+                    })
+                );
+                return refreshApex(this.wiredEventResult);
             })
-        );
+            .catch(error => {
+                this.dispatchEvent(
+                    new ShowToastEvent({
+                        title: 'Error updating event',
+                        message: error.body ? error.body.message : error.message,
+                        variant: 'error'
+                    })
+                );
+            })
+            .finally(() => {
+                this.isLoading = false;
+            });
     }
 
-    // Handle event deletion (placeholder - needs Apex method)
+    // Handle event deletion
     handleEventDelete(detail) {
         console.log('Event deletion requested:', detail);
+        this.isLoading = true;
 
-        this.dispatchEvent(
-            new ShowToastEvent({
-                title: 'Event Deletion',
-                message: 'Event deletion not yet implemented. Add deleteEvent Apex method.',
-                variant: 'info'
+        const eventId = detail.eventId || detail.id || (detail.event && detail.event.id);
+
+        deleteEvent({ eventId: eventId })
+            .then(() => {
+                this.dispatchEvent(
+                    new ShowToastEvent({
+                        title: 'Success',
+                        message: 'Event deleted successfully',
+                        variant: 'success'
+                    })
+                );
+                return refreshApex(this.wiredEventResult);
             })
-        );
+            .catch(error => {
+                this.dispatchEvent(
+                    new ShowToastEvent({
+                        title: 'Error deleting event',
+                        message: error.body ? error.body.message : error.message,
+                        variant: 'error'
+                    })
+                );
+            })
+            .finally(() => {
+                this.isLoading = false;
+            });
     }
 
     // Public API to refresh events from Salesforce
@@ -340,7 +414,7 @@ export default class ForceCalendarLwc extends LightningElement {
     @api
     goToDate(date) {
         if (this.calendarElement) {
-            this.calendarElement.goToDate(date);
+            this.calendarElement.setDate(date);
             this.updateDateRangeForDate(date, this.currentView);
         }
     }
