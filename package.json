@@ -1,18 +1,11 @@
 {
-  "name": "@forcecalendar/salesforce",
+  "name": "forcecalendar-salesforce",
   "version": "1.0.0",
-  "description": "ForceCalendar Salesforce Integration",
+  "private": true,
+  "description": "ForceCalendar Salesforce LWC - Build tools only",
   "type": "module",
   "scripts": {
-    "build": "node scripts/build.js",
-    "dev": "cd src && npm install",
-    "deploy:src": "cd src && sf project deploy start",
-    "deploy:dist": "cd dist && sf project deploy start",
-    "prepare-release": "npm run build && cd dist && zip -r ../forcecalendar-salesforce.zip ."
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/forceCalendar/salesforce.git"
+    "build": "node scripts/build.js"
   },
   "devDependencies": {
     "@rollup/plugin-node-resolve": "^15.3.0",

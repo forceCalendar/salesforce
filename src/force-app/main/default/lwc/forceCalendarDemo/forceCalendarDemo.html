@@ -1,0 +1,47 @@
+<template>
+    <lightning-card title="ForceCalendar Demo" icon-name="standard:event">
+        <!-- Control Buttons -->
+        <div slot="actions">
+            <lightning-button-group>
+                <lightning-button
+                    label="Month"
+                    onclick={handleSetMonthView}
+                    icon-name="utility:monthlyview"
+                ></lightning-button>
+                <lightning-button
+                    label="Week"
+                    onclick={handleSetWeekView}
+                    icon-name="utility:weeklyview"
+                ></lightning-button>
+                <lightning-button
+                    label="Day"
+                    onclick={handleSetDayView}
+                    icon-name="utility:dayview"
+                ></lightning-button>
+            </lightning-button-group>
+            <lightning-button-group class="slds-m-left_small">
+                <lightning-button
+                    label="Add Event"
+                    onclick={handleAddEvent}
+                    icon-name="utility:add"
+                    variant="brand"
+                ></lightning-button>
+                <lightning-button
+                    label="Clear"
+                    onclick={handleClearEvents}
+                    icon-name="utility:clear"
+                ></lightning-button>
+                <lightning-button
+                    label="Load Sample"
+                    onclick={handleLoadSampleEvents}
+                    icon-name="utility:refresh"
+                ></lightning-button>
+            </lightning-button-group>
+        </div>
+
+        <!-- Calendar Container -->
+        <div class="slds-p-around_medium">
+            <div class="calendar-container" lwc:dom="manual"></div>
+        </div>
+    </lightning-card>
+</template>

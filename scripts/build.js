@@ -177,6 +177,7 @@ function createPackageXml(distDir) {
     </types>
     <types>
         <members>forceCalendar</members>
+        <members>forceCalendarDemo</members>
         <name>LightningComponentBundle</name>
     </types>
     <version>60.0</version>
