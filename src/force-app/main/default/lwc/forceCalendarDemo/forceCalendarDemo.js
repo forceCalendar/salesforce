@@ -1,65 +1,64 @@
-import { LightningElement, track } from 'lwc';
-// Import forceCalendar module to ensure the web component library is loaded
-// This executes the bundled code that registers forcecal-* custom elements
-import ForceCalendarModule from 'c/forceCalendar';
-// Reference to prevent tree-shaking
-const _forceCalendarLoaded = ForceCalendarModule;
+import { LightningElement } from 'lwc';
+import { loadScript } from 'lightning/platformResourceLoader';
+import FORCECALENDAR_LIB from '@salesforce/resourceUrl/forcecalendar';
 
 export default class ForceCalendarDemo extends LightningElement {
-    @track isLoading = false;
-
-    calendarElement;
+    _libraryLoaded = false;
+    _calendarElement = null;
     _isInitialized = false;
 
+    async connectedCallback() {
+        if (!this._libraryLoaded) {
+            try {
+                await loadScript(this, FORCECALENDAR_LIB);
+                this._libraryLoaded = true;
+            } catch (err) {
+                console.error('Failed to load ForceCalendar library:', err);
+            }
+        }
+    }
+
     renderedCallback() {
-        if (this._isInitialized) {
+        if (this._isInitialized || !this._libraryLoaded) {
             return;
         }
         this._isInitialized = true;
-        this.initializeCalendar();
+        this._initCalendar();
     }
 
-    initializeCalendar() {
+    _initCalendar() {
         const container = this.template.querySelector('.calendar-container');
-        if (!container) return;
+        if (!container) {
+            return;
+        }
 
-        // Create the calendar web component
-        // Use dynamic string to bypass Salesforce static module analysis
-        const elementName = ['forcecal', 'main'].join('-');
-        this.calendarElement = document.createElement(elementName);
-        this.calendarElement.setAttribute('view', 'month');
-        this.calendarElement.setAttribute('height', '700px');
-        // Set inline styles to ensure visibility
-        this.calendarElement.style.display = 'block';
-        this.calendarElement.style.width = '100%';
-        this.calendarElement.style.height = '700px';
-        this.calendarElement.style.minHeight = '700px';
+        // Dynamic element name to bypass Salesforce static module analysis
+        const tag = ['forcecal', 'main'].join('-');
+        this._calendarElement = document.createElement(tag);
+        this._calendarElement.setAttribute('view', 'month');
+        this._calendarElement.setAttribute('height', '700px');
 
-        // Listen for events from the calendar
-        this.calendarElement.addEventListener('calendar-date-select', (e) => {
+        this._calendarElement.addEventListener('calendar-date-select', (e) => {
             console.log('Date selected:', e.detail);
         });
 
-        this.calendarElement.addEventListener('calendar-event-click', (e) => {
-            console.log('Event clicked:', e.detail);
+        this._calendarElement.addEventListener('calendar-event-added', (e) => {
+            console.log('Event added:', e.detail);
         });
 
-        this.calendarElement.addEventListener('calendar-event-create', (e) => {
-            console.log('Event create requested:', e.detail);
-        });
+        container.appendChild(this._calendarElement);
 
-        container.appendChild(this.calendarElement);
-
-        // Load sample events after calendar is ready
+        // Load sample events after a short delay so the element has time to mount
+        // eslint-disable-next-line @lwc/lwc/no-async-operation
         setTimeout(() => {
-            this.loadSampleEvents();
+            this._loadSampleEvents();
         }, 100);
     }
 
-    generateSampleEvents(baseDate = new Date()) {
+    _generateSampleEvents() {
         const events = [];
-        const today = baseDate;
-        const eventTypes = [
+        const today = new Date();
+        const types = [
             { title: 'Team Meeting', color: '#0176D3' },
             { title: 'Project Review', color: '#9050E9' },
             { title: 'Client Call', color: '#04844B' },
@@ -67,7 +66,6 @@ export default class ForceCalendarDemo extends LightningElement {
             { title: 'Training Session', color: '#EA001E' }
         ];
 
-        // Generate 15 events across the month
         for (let i = 0; i < 15; i++) {
             const daysOffset = Math.floor(Math.random() * 60) - 30;
             const startDate = new Date(today);
@@ -76,14 +74,13 @@ export default class ForceCalendarDemo extends LightningElement {
             const startHour = 8 + Math.floor(Math.random() * 10);
             startDate.setHours(startHour, Math.random() < 0.5 ? 0 : 30, 0, 0);
 
-            const duration = (0.5 + Math.random() * 2);
-            const endDate = new Date(startDate);
-            endDate.setTime(endDate.getTime() + duration * 60 * 60 * 1000);
+            const duration = 0.5 + Math.random() * 2;
+            const endDate = new Date(startDate.getTime() + duration * 60 * 60 * 1000);
 
-            const eventType = eventTypes[Math.floor(Math.random() * eventTypes.length)];
+            const eventType = types[Math.floor(Math.random() * types.length)];
 
             events.push({
-                id: `demo-event-${i}`,
+                id: 'demo-event-' + i,
                 title: eventType.title,
                 start: startDate,
                 end: endDate,
@@ -96,68 +93,75 @@ export default class ForceCalendarDemo extends LightningElement {
         return events;
     }
 
-    handleAddEvent() {
-        if (!this.calendarElement) return;
+    _loadSampleEvents() {
+        if (!this._calendarElement) {
+            return;
+        }
+        const events = this._generateSampleEvents();
+        events.forEach(event => {
+            this._calendarElement.addEvent(event);
+        });
+        console.log('Loaded ' + events.length + ' sample events');
+    }
 
-        const newEvent = {
-            id: `event-${Date.now()}`,
+    _clearEvents() {
+        if (!this._calendarElement) {
+            return;
+        }
+        const events = this._calendarElement.getEvents
+            ? this._calendarElement.getEvents()
+            : [];
+        if (events && events.length > 0) {
+            events.forEach(evt => {
+                if (this._calendarElement.deleteEvent) {
+                    this._calendarElement.deleteEvent(evt.id);
+                }
+            });
+        }
+    }
+
+    handleAddEvent() {
+        if (!this._calendarElement) {
+            return;
+        }
+        this._calendarElement.addEvent({
+            id: 'event-' + Date.now(),
             title: 'New Event',
             start: new Date(),
             end: new Date(Date.now() + 60 * 60 * 1000),
             allDay: false,
             description: 'New event added via demo',
             color: '#0176D3'
-        };
-
-        this.calendarElement.addEvent(newEvent);
+        });
     }
 
     handleClearEvents() {
-        if (!this.calendarElement) return;
-
-        const events = this.calendarElement.getEvents ? this.calendarElement.getEvents() : [];
-        if (events && events.length > 0) {
-            events.forEach(evt => {
-                if (this.calendarElement.deleteEvent) {
-                    this.calendarElement.deleteEvent(evt.id);
-                }
-            });
-        }
-    }
-
-    loadSampleEvents() {
-        if (!this.calendarElement) return;
-
-        const events = this.generateSampleEvents();
-        events.forEach(event => {
-            this.calendarElement.addEvent(event);
-        });
-
-        console.log(`Loaded ${events.length} sample events`);
+        this._clearEvents();
     }
 
     handleLoadSampleEvents() {
-        this.handleClearEvents();
+        this._clearEvents();
+        // eslint-disable-next-line @lwc/lwc/no-async-operation
         setTimeout(() => {
-            this.loadSampleEvents();
+            this._loadSampleEvents();
         }, 100);
     }
 
     handleSetMonthView() {
-        if (this.calendarElement) {
-            this.calendarElement.setView('month');
+        if (this._calendarElement) {
+            this._calendarElement.setView('month');
         }
     }
 
     handleSetWeekView() {
-        if (this.calendarElement) {
-            this.calendarElement.setView('week');
+        if (this._calendarElement) {
+            this._calendarElement.setView('week');
         }
     }
 
     handleSetDayView() {
-        if (this.calendarElement) {
-            this.calendarElement.setView('day');
+        if (this._calendarElement) {
+            this._calendarElement.setView('day');
         }
     }
 }

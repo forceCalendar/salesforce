@@ -1,153 +1,173 @@
-import { LightningElement, api, wire, track } from 'lwc';
+import { LightningElement, api, wire } from 'lwc';
+import { loadScript } from 'lightning/platformResourceLoader';
 import { refreshApex } from '@salesforce/apex';
 import { ShowToastEvent } from 'lightning/platformShowToastEvent';
+import FORCECALENDAR_LIB from '@salesforce/resourceUrl/forcecalendar';
 
-// Import Apex methods
 import getEvents from '@salesforce/apex/ForceCalendarController.getEvents';
 import createEvent from '@salesforce/apex/ForceCalendarController.createEvent';
 import updateEvent from '@salesforce/apex/ForceCalendarController.updateEvent';
 import deleteEvent from '@salesforce/apex/ForceCalendarController.deleteEvent';
 
-// Import the calendar interface library
-import '@forcecalendar/interface';
-
-export default class ForceCalendarLwc extends LightningElement {
+export default class ForceCalendar extends LightningElement {
     @api currentView = 'month';
     @api height = '800px';
+    @api recordId;
+    @api readOnly = false;
 
-    @track startDateTime;
-    @track endDateTime;
-    @track isLoading = false;
-    @track error;
+    _libraryLoaded = false;
+    _calendarElement = null;
+    _isLoading = false;
+    _error;
+    _startDateTime;
+    _endDateTime;
+    _wiredEventResult;
 
-    calendarElement;
-    _isInitialized = false;
-    wiredEventResult;
+    // --- Lifecycle ---
 
-    connectedCallback() {
-        // Initialize date range based on current view
-        this.calculateDateRange();
+    async connectedCallback() {
+        this._calculateDateRange();
+        if (!this._libraryLoaded) {
+            try {
+                await loadScript(this, FORCECALENDAR_LIB);
+                this._libraryLoaded = true;
+            } catch (err) {
+                this._error = 'Failed to load calendar library';
+            }
+        }
     }
 
     renderedCallback() {
-        if (this._isInitialized) {
+        if (!this._libraryLoaded || this._calendarElement) {
             return;
         }
-        this._isInitialized = true;
-
-        this.initializeCalendar();
+        this._initCalendar();
     }
 
-    // Wire Apex method to fetch events
+    disconnectedCallback() {
+        if (this._calendarElement) {
+            const container = this.template.querySelector('.calendar-container');
+            if (container && this._calendarElement.parentNode === container) {
+                container.removeChild(this._calendarElement);
+            }
+            this._calendarElement = null;
+        }
+    }
+
+    // --- Wire: fetch events from Apex ---
+
     @wire(getEvents, {
-        startDateTime: '$startDateTime',
-        endDateTime: '$endDateTime'
+        startDateTime: '$_startDateTime',
+        endDateTime: '$_endDateTime',
+        recordId: '$recordId'
     })
-    wiredEvents(result) {
-        this.wiredEventResult = result;
+    _wiredEvents(result) {
+        this._wiredEventResult = result;
         const { error, data } = result;
 
         if (data) {
-            this.isLoading = false;
-            this.error = undefined;
-
-            // Pass events to the calendar
-            if (this.calendarElement) {
-                // Clear existing events by deleting each one
-                const existingEvents = this.calendarElement.getEvents ? this.calendarElement.getEvents() : [];
-                if (existingEvents && existingEvents.length > 0) {
-                    existingEvents.forEach(evt => {
-                        if (this.calendarElement.deleteEvent) {
-                            this.calendarElement.deleteEvent(evt.id);
-                        }
-                    });
-                }
-
-                // Add all events from Salesforce
-                data.forEach(event => {
-                    this.calendarElement.addEvent({
-                        id: event.id,
-                        title: event.title || 'Untitled Event',
-                        start: new Date(event.start),
-                        end: new Date(event.end),
-                        allDay: event.allDay || false,
-                        description: event.description || '',
-                        color: event.backgroundColor || '#0176D3'
-                    });
-                });
-
-                console.log(`Loaded ${data.length} events from Salesforce`);
-            }
+            this._isLoading = false;
+            this._error = undefined;
+            this._loadEventsIntoCalendar(data);
         } else if (error) {
-            this.isLoading = false;
-            this.error = 'Error loading events';
-            console.error('Error fetching events:', error);
-
-            // Show error toast
-            this.dispatchEvent(
-                new ShowToastEvent({
-                    title: 'Error loading events',
-                    message: error.body ? error.body.message : error.message,
-                    variant: 'error'
-                })
-            );
+            this._isLoading = false;
+            this._error = 'Error loading events';
+            this._showToast('Error loading events', this._extractErrorMessage(error), 'error');
         }
     }
 
-    initializeCalendar() {
+    // --- Calendar initialization ---
+
+    _initCalendar() {
         const container = this.template.querySelector('.calendar-container');
+        if (!container) {
+            return;
+        }
 
-        // Create the custom element
-        // Use dynamic string to bypass Salesforce's static module analysis
-        const elementName = 'forcecal' + '-' + 'main';
-        this.calendarElement = document.createElement(elementName);
-        this.calendarElement.setAttribute('view', this.currentView);
-        this.calendarElement.setAttribute('height', this.height);
+        // Dynamic element name to bypass Salesforce static module analysis
+        const tag = ['forcecal', 'main'].join('-');
+        this._calendarElement = document.createElement(tag);
+        this._calendarElement.setAttribute('view', this.currentView);
+        this._calendarElement.setAttribute('height', this.height);
 
-        // Map events from the Web Component to LWC events
-        this.calendarElement.addEventListener('calendar-date-select', (e) => {
+        // Navigation events
+        this._calendarElement.addEventListener('calendar-navigate', (e) => {
+            this._handleNavigate(e.detail);
+            this.dispatchEvent(new CustomEvent('navigate', { detail: e.detail }));
+        });
+
+        // View change events
+        this._calendarElement.addEventListener('calendar-view-change', (e) => {
+            this._handleViewChange(e.detail);
+            this.dispatchEvent(new CustomEvent('viewchange', { detail: e.detail }));
+        });
+
+        // Date selection
+        this._calendarElement.addEventListener('calendar-date-select', (e) => {
             this.dispatchEvent(new CustomEvent('dateselect', { detail: e.detail }));
         });
 
-        this.calendarElement.addEventListener('calendar-event-click', (e) => {
-            this.dispatchEvent(new CustomEvent('eventclick', { detail: e.detail }));
+        // Event lifecycle: use the confirmed past-tense events from the interface
+        this._calendarElement.addEventListener('calendar-event-added', (e) => {
+            if (!this.readOnly) {
+                this._handleEventCreate(e.detail);
+            }
         });
 
-        // Listen for view changes to update date range
-        this.calendarElement.addEventListener('calendar-view-change', (e) => {
-            this.handleViewChange(e.detail);
+        this._calendarElement.addEventListener('calendar-event-updated', (e) => {
+            if (!this.readOnly) {
+                this._handleEventUpdate(e.detail);
+            }
         });
 
-        // Listen for navigation (next/prev/today)
-        this.calendarElement.addEventListener('calendar-navigate', (e) => {
-            this.handleNavigate(e.detail);
+        this._calendarElement.addEventListener('calendar-event-deleted', (e) => {
+            if (!this.readOnly) {
+                this._handleEventDelete(e.detail);
+            }
         });
 
-        // Listen for event creation requests
-        this.calendarElement.addEventListener('calendar-event-create', (e) => {
-            this.handleEventCreate(e.detail);
-        });
+        container.appendChild(this._calendarElement);
 
-        // Listen for event update requests
-        this.calendarElement.addEventListener('calendar-event-update', (e) => {
-            this.handleEventUpdate(e.detail);
-        });
-
-        // Listen for event delete requests
-        this.calendarElement.addEventListener('calendar-event-delete', (e) => {
-            this.handleEventDelete(e.detail);
-        });
-
-        container.appendChild(this.calendarElement);
-
-        // If we already have data, load it into the calendar
-        if (this.wiredEventResult && this.wiredEventResult.data) {
-            this.wiredEvents(this.wiredEventResult);
+        // If wire data already arrived before the calendar was ready, load it now
+        if (this._wiredEventResult && this._wiredEventResult.data) {
+            this._loadEventsIntoCalendar(this._wiredEventResult.data);
         }
     }
 
-    // Calculate date range based on current view
-    calculateDateRange() {
+    _loadEventsIntoCalendar(data) {
+        if (!this._calendarElement) {
+            return;
+        }
+
+        // Clear existing events
+        const existing = this._calendarElement.getEvents
+            ? this._calendarElement.getEvents()
+            : [];
+        if (existing && existing.length > 0) {
+            existing.forEach(evt => {
+                if (this._calendarElement.deleteEvent) {
+                    this._calendarElement.deleteEvent(evt.id);
+                }
+            });
+        }
+
+        // Add all events from Salesforce
+        data.forEach(event => {
+            this._calendarElement.addEvent({
+                id: event.id,
+                title: event.title || 'Untitled Event',
+                start: new Date(event.start),
+                end: new Date(event.end),
+                allDay: event.allDay || false,
+                description: event.description || '',
+                color: event.backgroundColor || '#0176D3'
+            });
+        });
+    }
+
+    // --- Date range calculation ---
+
+    _calculateDateRange() {
         const now = new Date();
         const year = now.getFullYear();
         const month = now.getMonth();
@@ -155,89 +175,48 @@ export default class ForceCalendarLwc extends LightningElement {
 
         let start, end;
 
-        switch(this.currentView) {
-            case 'month':
-                // Get first and last day of current month, plus buffer for adjacent days
-                start = new Date(year, month - 1, 1); // Previous month start for buffer
-                end = new Date(year, month + 2, 0); // Next month end for buffer
-                break;
-
-            case 'week':
-                // Get current week (Sunday to Saturday by default)
+        switch (this.currentView) {
+            case 'week': {
                 const day = now.getDay();
-                start = new Date(year, month, date - day - 7); // Include previous week
-                end = new Date(year, month, date + (6 - day) + 7); // Include next week
+                start = new Date(year, month, date - day - 7);
+                end = new Date(year, month, date + (6 - day) + 7);
                 break;
-
+            }
             case 'day':
-                // Current day plus/minus one day for context
                 start = new Date(year, month, date - 1);
                 end = new Date(year, month, date + 1);
                 break;
-
             default:
-                // Default to month view
                 start = new Date(year, month - 1, 1);
                 end = new Date(year, month + 2, 0);
         }
 
-        // Set time to start and end of day
         start.setHours(0, 0, 0, 0);
         end.setHours(23, 59, 59, 999);
 
-        this.startDateTime = start;
-        this.endDateTime = end;
-
-        console.log(`Date range updated: ${start.toLocaleDateString()} - ${end.toLocaleDateString()}`);
+        this._startDateTime = start.toISOString();
+        this._endDateTime = end.toISOString();
     }
 
-    // Handle view changes
-    handleViewChange(detail) {
-        this.currentView = detail.view;
-
-        // Update date range for the new view
-        if (detail.date) {
-            this.updateDateRangeForDate(detail.date, detail.view);
-        } else {
-            this.calculateDateRange();
-        }
-    }
-
-    // Handle navigation (next/prev/today)
-    handleNavigate(detail) {
-        if (detail.date) {
-            this.updateDateRangeForDate(detail.date, this.currentView);
-        } else if (detail.action === 'today') {
-            this.calculateDateRange();
-        }
-    }
-
-    // Update date range for a specific date and view
-    updateDateRangeForDate(targetDate, view) {
-        const date = new Date(targetDate);
-        const year = date.getFullYear();
-        const month = date.getMonth();
-        const day = date.getDate();
+    _updateDateRangeForDate(targetDate, view) {
+        const d = new Date(targetDate);
+        const year = d.getFullYear();
+        const month = d.getMonth();
+        const day = d.getDate();
 
         let start, end;
 
-        switch(view) {
-            case 'month':
-                start = new Date(year, month - 1, 1);
-                end = new Date(year, month + 2, 0);
+        switch (view) {
+            case 'week': {
+                const dow = d.getDay();
+                start = new Date(year, month, day - dow - 7);
+                end = new Date(year, month, day + (6 - dow) + 7);
                 break;
-
-            case 'week':
-                const dayOfWeek = date.getDay();
-                start = new Date(year, month, day - dayOfWeek - 7);
-                end = new Date(year, month, day + (6 - dayOfWeek) + 7);
-                break;
-
+            }
             case 'day':
                 start = new Date(year, month, day - 1);
                 end = new Date(year, month, day + 1);
                 break;
-
             default:
                 start = new Date(year, month - 1, 1);
                 end = new Date(year, month + 2, 0);
@@ -246,23 +225,41 @@ export default class ForceCalendarLwc extends LightningElement {
         start.setHours(0, 0, 0, 0);
         end.setHours(23, 59, 59, 999);
 
-        // Only update if the range actually changed
-        if (this.startDateTime?.getTime() !== start.getTime() ||
-            this.endDateTime?.getTime() !== end.getTime()) {
-            this.startDateTime = start;
-            this.endDateTime = end;
-            console.log(`Date range updated: ${start.toLocaleDateString()} - ${end.toLocaleDateString()}`);
+        const newStart = start.toISOString();
+        const newEnd = end.toISOString();
+
+        if (this._startDateTime !== newStart || this._endDateTime !== newEnd) {
+            this._startDateTime = newStart;
+            this._endDateTime = newEnd;
         }
     }
 
-    // Handle event creation
-    handleEventCreate(detail) {
-        console.log('Event creation requested:', detail);
-        this.isLoading = true;
+    // --- Event handlers ---
 
+    _handleViewChange(detail) {
+        this.currentView = detail.view;
+        if (detail.date) {
+            this._updateDateRangeForDate(detail.date, detail.view);
+        } else {
+            this._calculateDateRange();
+        }
+    }
+
+    _handleNavigate(detail) {
+        if (detail.date) {
+            this._updateDateRangeForDate(detail.date, this.currentView);
+        } else if (detail.action === 'today') {
+            this._calculateDateRange();
+        }
+    }
+
+    _handleEventCreate(detail) {
+        this._isLoading = true;
         const eventData = detail.event || detail;
         const startDt = eventData.start ? new Date(eventData.start) : new Date();
-        const endDt = eventData.end ? new Date(eventData.end) : new Date(startDt.getTime() + 60 * 60 * 1000);
+        const endDt = eventData.end
+            ? new Date(eventData.end)
+            : new Date(startDt.getTime() + 60 * 60 * 1000);
 
         createEvent({
             title: eventData.title || 'New Event',
@@ -271,35 +268,21 @@ export default class ForceCalendarLwc extends LightningElement {
             isAllDay: eventData.allDay || false,
             description: eventData.description || ''
         })
-            .then(eventId => {
-                this.dispatchEvent(
-                    new ShowToastEvent({
-                        title: 'Success',
-                        message: 'Event created successfully',
-                        variant: 'success'
-                    })
-                );
-                return refreshApex(this.wiredEventResult);
+            .then(() => {
+                this._showToast('Success', 'Event created', 'success');
+                this.dispatchEvent(new CustomEvent('eventcreate', { detail: eventData }));
+                return refreshApex(this._wiredEventResult);
             })
             .catch(error => {
-                this.dispatchEvent(
-                    new ShowToastEvent({
-                        title: 'Error creating event',
-                        message: error.body ? error.body.message : error.message,
-                        variant: 'error'
-                    })
-                );
+                this._showToast('Error creating event', this._extractErrorMessage(error), 'error');
             })
             .finally(() => {
-                this.isLoading = false;
+                this._isLoading = false;
             });
     }
 
-    // Handle event updates
-    handleEventUpdate(detail) {
-        console.log('Event update requested:', detail);
-        this.isLoading = true;
-
+    _handleEventUpdate(detail) {
+        this._isLoading = true;
         const eventData = detail.event || detail;
 
         updateEvent({
@@ -311,122 +294,98 @@ export default class ForceCalendarLwc extends LightningElement {
             description: eventData.description
         })
             .then(() => {
-                this.dispatchEvent(
-                    new ShowToastEvent({
-                        title: 'Success',
-                        message: 'Event updated successfully',
-                        variant: 'success'
-                    })
-                );
-                return refreshApex(this.wiredEventResult);
+                this._showToast('Success', 'Event updated', 'success');
+                this.dispatchEvent(new CustomEvent('eventupdate', { detail: eventData }));
+                return refreshApex(this._wiredEventResult);
             })
             .catch(error => {
-                this.dispatchEvent(
-                    new ShowToastEvent({
-                        title: 'Error updating event',
-                        message: error.body ? error.body.message : error.message,
-                        variant: 'error'
-                    })
-                );
+                this._showToast('Error updating event', this._extractErrorMessage(error), 'error');
             })
             .finally(() => {
-                this.isLoading = false;
+                this._isLoading = false;
             });
     }
 
-    // Handle event deletion
-    handleEventDelete(detail) {
-        console.log('Event deletion requested:', detail);
-        this.isLoading = true;
-
+    _handleEventDelete(detail) {
+        this._isLoading = true;
         const eventId = detail.eventId || detail.id || (detail.event && detail.event.id);
 
-        deleteEvent({ eventId: eventId })
+        deleteEvent({ eventId })
             .then(() => {
-                this.dispatchEvent(
-                    new ShowToastEvent({
-                        title: 'Success',
-                        message: 'Event deleted successfully',
-                        variant: 'success'
-                    })
-                );
-                return refreshApex(this.wiredEventResult);
+                this._showToast('Success', 'Event deleted', 'success');
+                this.dispatchEvent(new CustomEvent('eventdelete', { detail: { eventId } }));
+                return refreshApex(this._wiredEventResult);
             })
             .catch(error => {
-                this.dispatchEvent(
-                    new ShowToastEvent({
-                        title: 'Error deleting event',
-                        message: error.body ? error.body.message : error.message,
-                        variant: 'error'
-                    })
-                );
+                this._showToast('Error deleting event', this._extractErrorMessage(error), 'error');
             })
             .finally(() => {
-                this.isLoading = false;
+                this._isLoading = false;
             });
     }
 
-    // Public API to refresh events from Salesforce
+    // --- Public API ---
+
     @api
     refreshEvents() {
-        this.isLoading = true;
-        return refreshApex(this.wiredEventResult)
-            .then(() => {
-                this.dispatchEvent(
-                    new ShowToastEvent({
-                        title: 'Success',
-                        message: 'Events refreshed',
-                        variant: 'success'
-                    })
-                );
-            })
-            .catch(error => {
-                this.dispatchEvent(
-                    new ShowToastEvent({
-                        title: 'Error refreshing events',
-                        message: error.body ? error.body.message : error.message,
-                        variant: 'error'
-                    })
-                );
-            })
+        this._isLoading = true;
+        return refreshApex(this._wiredEventResult)
             .finally(() => {
-                this.isLoading = false;
+                this._isLoading = false;
             });
     }
 
-    // Public API to add event (locally, needs save to Salesforce)
     @api
     addEvent(event) {
-        if (this.calendarElement) {
-            this.calendarElement.addEvent(event);
+        if (this._calendarElement) {
+            this._calendarElement.addEvent(event);
         }
     }
 
-    // Public API to change view
     @api
     setView(view) {
-        if (this.calendarElement) {
-            this.calendarElement.setView(view);
+        if (this._calendarElement) {
+            this._calendarElement.setView(view);
             this.currentView = view;
-            this.calculateDateRange();
+            this._calculateDateRange();
         }
     }
 
-    // Public API to navigate to a specific date
     @api
     goToDate(date) {
-        if (this.calendarElement) {
-            this.calendarElement.setDate(date);
-            this.updateDateRangeForDate(date, this.currentView);
+        if (this._calendarElement) {
+            this._calendarElement.setDate(date);
+            this._updateDateRangeForDate(date, this.currentView);
         }
     }
 
-    // Getters for template
+    // --- Template getters ---
+
     get showSpinner() {
-        return this.isLoading;
+        return this._isLoading;
     }
 
     get hasError() {
-        return !!this.error;
+        return !!this._error;
+    }
+
+    get errorMessage() {
+        return this._error;
+    }
+
+    // --- Utilities ---
+
+    _showToast(title, message, variant) {
+        this.dispatchEvent(new ShowToastEvent({ title, message, variant }));
+    }
+
+    _extractErrorMessage(error) {
+        if (error && error.body && error.body.message) {
+            return error.body.message;
+        }
+        if (error && error.message) {
+            return error.message;
+        }
+        return 'An unexpected error occurred';
     }
 }

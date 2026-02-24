@@ -2,7 +2,9 @@
 
 /**
  * Build script for ForceCalendar Salesforce
- * Bundles @forcecalendar/interface into a self-contained LWC
+ *
+ * Bundles @forcecalendar/interface (+ core peer dep) into an IIFE static
+ * resource, copies Salesforce metadata to dist/, and creates deploy artifacts.
  */
 
 import fs from 'fs';
@@ -27,12 +29,12 @@ async function build() {
     if (fs.existsSync(distDir)) {
         fs.rmSync(distDir, { recursive: true });
     }
-    fs.mkdirSync(distDir);
+    fs.mkdirSync(distDir, { recursive: true });
 
-    // Step 2: Bundle @forcecalendar/interface with Rollup
-    console.log('2. Bundling @forcecalendar/interface with Rollup...');
-    const interfaceBundle = await bundleInterface(srcDir);
-    console.log(`   Bundled size: ${(interfaceBundle.length / 1024).toFixed(1)} KB`);
+    // Step 2: Bundle @forcecalendar/interface into IIFE for static resource
+    console.log('2. Bundling @forcecalendar/interface as IIFE static resource...');
+    const bundleCode = await bundleInterface(srcDir);
+    console.log(`   Bundle size: ${(bundleCode.length / 1024).toFixed(1)} KB`);
 
     // Step 3: Copy Salesforce project files
     console.log('3. Copying Salesforce metadata...');
@@ -45,20 +47,41 @@ async function build() {
         path.join(distDir, 'sfdx-project.json')
     );
 
-    // Step 4: Inject bundle into LWC
-    console.log('4. Injecting bundle into LWC...');
-    await injectBundleIntoLwc(srcDir, distDir, interfaceBundle);
+    // Step 4: Write bundle as static resource
+    console.log('4. Writing static resource...');
+    const staticResourceDir = path.join(distDir, 'force-app/main/default/staticresources');
+    fs.mkdirSync(staticResourceDir, { recursive: true });
 
-    // Step 5: Create package.xml
+    fs.writeFileSync(
+        path.join(staticResourceDir, 'forcecalendar.js'),
+        bundleCode
+    );
+    fs.writeFileSync(
+        path.join(staticResourceDir, 'forcecalendar.resource-meta.xml'),
+        `<?xml version="1.0" encoding="UTF-8"?>
+<StaticResource xmlns="http://soap.sforce.com/2006/04/metadata">
+    <cacheControl>Public</cacheControl>
+    <contentType>application/javascript</contentType>
+    <description>ForceCalendar bundled library - @forcecalendar/core + @forcecalendar/interface</description>
+</StaticResource>`
+    );
+
+    // Step 5: Remove dead-end files from dist
+    const bundledPath = path.join(distDir, 'force-app/main/default/lwc/forceCalendar/forceCalendar_bundled.js');
+    if (fs.existsSync(bundledPath)) {
+        fs.unlinkSync(bundledPath);
+    }
+
+    // Step 6: Create package.xml
     console.log('5. Creating package.xml...');
     createPackageXml(distDir);
 
-    // Step 6: Create deployment scripts
+    // Step 7: Create deployment scripts
     console.log('6. Creating deployment scripts...');
     createDeployScripts(distDir);
 
     console.log('\nBuild complete!');
-    console.log('\nDistribution package created in: ./dist/');
+    console.log(`\nDistribution: ${distDir}`);
     console.log('\nTo deploy:');
     console.log('  cd dist');
     console.log('  sf project deploy start\n');
@@ -67,16 +90,22 @@ async function build() {
 }
 
 async function bundleInterface(srcDir) {
-    // Create a temporary entry file that imports the interface
-    const entryContent = `
-        import '@forcecalendar/interface';
-    `;
+    // Use a named import + global assignment to prevent Rollup from
+    // tree-shaking the side-effect-heavy interface module (which registers
+    // custom elements as a side effect of being imported).
+    const entryContent = [
+        `import { ForceCalendar } from '@forcecalendar/interface';`,
+        `globalThis.ForceCalendar = ForceCalendar;`
+    ].join('\n') + '\n';
     const entryPath = path.join(srcDir, '_bundle-entry.js');
     fs.writeFileSync(entryPath, entryContent);
 
     try {
         const bundle = await rollup({
             input: entryPath,
+            treeshake: {
+                moduleSideEffects: true
+            },
             plugins: [
                 resolve({
                     browser: true,
@@ -94,7 +123,6 @@ async function bundleInterface(srcDir) {
                 })
             ],
             onwarn(warning, warn) {
-                // Suppress circular dependency warnings
                 if (warning.code === 'CIRCULAR_DEPENDENCY') return;
                 warn(warning);
             }
@@ -108,40 +136,10 @@ async function bundleInterface(srcDir) {
         await bundle.close();
         return output[0].code;
     } finally {
-        // Clean up temp entry file
         if (fs.existsSync(entryPath)) {
             fs.unlinkSync(entryPath);
         }
     }
-}
-
-async function injectBundleIntoLwc(srcDir, distDir, bundleCode) {
-    const lwcDir = path.join(distDir, 'force-app/main/default/lwc/forceCalendar');
-    const distLwcPath = path.join(lwcDir, 'forceCalendar.js');
-
-    // Read the source LWC
-    const srcLwcPath = path.join(srcDir, 'force-app/main/default/lwc/forceCalendar/forceCalendar.js');
-    let lwcContent = fs.readFileSync(srcLwcPath, 'utf8');
-
-    // Remove the npm import line
-    lwcContent = lwcContent.replace(
-        /import\s+['"]@forcecalendar\/interface['"];?\n?/g,
-        ''
-    );
-
-    // Create the final content with bundle injected
-    const finalContent = `/**
- * ForceCalendar LWC - Distribution Version
- * @forcecalendar/interface is bundled below
- */
-
-// === Bundled @forcecalendar/interface ===
-${bundleCode}
-// === End of bundle ===
-
-${lwcContent}`;
-
-    fs.writeFileSync(distLwcPath, finalContent);
 }
 
 function copyRecursive(src, dest) {
@@ -155,7 +153,6 @@ function copyRecursive(src, dest) {
         const srcPath = path.join(src, entry.name);
         const destPath = path.join(dest, entry.name);
 
-        // Skip node_modules and package files
         if (entry.name === 'node_modules' || entry.name === 'package.json' || entry.name === 'package-lock.json') {
             continue;
         }
@@ -173,26 +170,27 @@ function createPackageXml(distDir) {
 <Package xmlns="http://soap.sforce.com/2006/04/metadata">
     <types>
         <members>ForceCalendarController</members>
+        <members>ForceCalendarControllerTest</members>
         <name>ApexClass</name>
+    </types>
+    <types>
+        <members>forcecalendar</members>
+        <name>StaticResource</name>
     </types>
     <types>
         <members>forceCalendar</members>
         <members>forceCalendarDemo</members>
         <name>LightningComponentBundle</name>
     </types>
-    <version>60.0</version>
+    <version>62.0</version>
 </Package>`;
 
     const manifestDir = path.join(distDir, 'manifest');
-    if (!fs.existsSync(manifestDir)) {
-        fs.mkdirSync(manifestDir);
-    }
-
+    fs.mkdirSync(manifestDir, { recursive: true });
     fs.writeFileSync(path.join(manifestDir, 'package.xml'), packageXml);
 }
 
 function createDeployScripts(distDir) {
-    // Linux/Mac script
     const bashScript = `#!/bin/bash
 # Deploy ForceCalendar to Salesforce
 
@@ -207,7 +205,6 @@ else
 fi
 `;
 
-    // Windows script
     const batScript = `@echo off
 REM Deploy ForceCalendar to Salesforce
 
@@ -227,7 +224,6 @@ if %ERRORLEVEL% EQU 0 (
     fs.writeFileSync(path.join(distDir, 'deploy.bat'), batScript);
 }
 
-// Run the build
 build().catch(err => {
     console.error('Build failed:', err);
     process.exit(1);
