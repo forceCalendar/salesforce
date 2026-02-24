@@ -28,3 +28,8 @@ dist/
 # Node modules
 node_modules/
 src/node_modules/
+
+# Certificates and secrets
+.certs/
+*.key
+*.pem
