@@ -12,6 +12,7 @@ export default class ForceCalendarDemo extends LightningElement {
             try {
                 await loadScript(this, FORCECALENDAR_LIB);
                 this._libraryLoaded = true;
+                this._tryInit();
             } catch (err) {
                 console.error('Failed to load ForceCalendar library:', err);
             }
@@ -19,7 +20,15 @@ export default class ForceCalendarDemo extends LightningElement {
     }
 
     renderedCallback() {
+        this._tryInit();
+    }
+
+    _tryInit() {
         if (this._isInitialized || !this._libraryLoaded) {
+            return;
+        }
+        const container = this.template.querySelector('.calendar-container');
+        if (!container) {
             return;
         }
         this._isInitialized = true;
@@ -48,11 +57,11 @@ export default class ForceCalendarDemo extends LightningElement {
 
         container.appendChild(this._calendarElement);
 
-        // Load sample events after a short delay so the element has time to mount
+        // Load sample events after element has time to mount
         // eslint-disable-next-line @lwc/lwc/no-async-operation
         setTimeout(() => {
             this._loadSampleEvents();
-        }, 100);
+        }, 500);
     }
 
     _generateSampleEvents() {
@@ -101,7 +110,6 @@ export default class ForceCalendarDemo extends LightningElement {
         events.forEach(event => {
             this._calendarElement.addEvent(event);
         });
-        console.log('Loaded ' + events.length + ' sample events');
     }
 
     _clearEvents() {

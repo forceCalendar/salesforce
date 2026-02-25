@@ -31,6 +31,7 @@ export default class ForceCalendar extends LightningElement {
             try {
                 await loadScript(this, FORCECALENDAR_LIB);
                 this._libraryLoaded = true;
+                this._tryInit();
             } catch (err) {
                 this._error = 'Failed to load calendar library';
             }
@@ -38,7 +39,15 @@ export default class ForceCalendar extends LightningElement {
     }
 
     renderedCallback() {
+        this._tryInit();
+    }
+
+    _tryInit() {
         if (!this._libraryLoaded || this._calendarElement) {
+            return;
+        }
+        const container = this.template.querySelector('.calendar-container');
+        if (!container) {
             return;
         }
         this._initCalendar();
