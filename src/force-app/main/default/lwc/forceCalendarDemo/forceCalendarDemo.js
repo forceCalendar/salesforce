@@ -128,21 +128,6 @@ export default class ForceCalendarDemo extends LightningElement {
         }
     }
 
-    handleAddEvent() {
-        if (!this._calendarElement) {
-            return;
-        }
-        this._calendarElement.addEvent({
-            id: 'event-' + Date.now(),
-            title: 'New Event',
-            start: new Date(),
-            end: new Date(Date.now() + 60 * 60 * 1000),
-            allDay: false,
-            description: 'New event added via demo',
-            color: '#0176D3'
-        });
-    }
-
     handleClearEvents() {
         this._clearEvents();
     }
@@ -153,23 +138,5 @@ export default class ForceCalendarDemo extends LightningElement {
         setTimeout(() => {
             this._loadSampleEvents();
         }, 100);
-    }
-
-    handleSetMonthView() {
-        if (this._calendarElement) {
-            this._calendarElement.setView('month');
-        }
-    }
-
-    handleSetWeekView() {
-        if (this._calendarElement) {
-            this._calendarElement.setView('week');
-        }
-    }
-
-    handleSetDayView() {
-        if (this._calendarElement) {
-            this._calendarElement.setView('day');
-        }
     }
 }
