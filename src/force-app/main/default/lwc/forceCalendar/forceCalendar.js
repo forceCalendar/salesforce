@@ -88,6 +88,8 @@ export default class ForceCalendar extends LightningElement {
         const tag = ['forcecal', 'main'].join('-');
         this._calendarElement = document.createElement(tag);
         this._calendarElement.setAttribute('view', this.currentView);
+        // Native platform look by default (SLDS token preset)
+        this._calendarElement.setAttribute('theme', 'slds');
         this._calendarElement.setAttribute('height', this.height);
 
         // Navigation events

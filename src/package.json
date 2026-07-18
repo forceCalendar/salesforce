@@ -11,6 +11,6 @@
   "license": "ISC",
   "dependencies": {
     "@forcecalendar/core": "^2.3.0",
-    "@forcecalendar/interface": "^1.4.0"
+    "@forcecalendar/interface": "^1.5.0"
   }
 }
