@@ -3,9 +3,10 @@
     <apiVersion>62.0</apiVersion>
     <isExposed>true</isExposed>
     <masterLabel>Force Calendar</masterLabel>
-    <description>Enterprise Calendar Component for Salesforce</description>
+    <description>Calendar for Salesforce Event records</description>
     <targets>
         <target>lightning__AppPage</target>
+        <target>lightning__Tab</target>
         <target>lightning__RecordPage</target>
         <target>lightning__HomePage</target>
     </targets>

@@ -33,12 +33,13 @@ The review focuses on exactly what this project was engineered for:
 
 - **No eval / dynamic code**: none anywhere in the bundle (CI-verifiable:
   `grep -E "eval\(|new Function" dist/.../forcecalendar.js` is empty).
-- **Locker/LWS compliance**: the component runs under Lightning Web
-  Security today; the custom element is created via `createElement` to
-  respect static analysis.
-- **CRUD/FLS**: `ForceCalendarController` uses `WITH SECURITY_ENFORCED`
+- **Lightning Web Security required**: this integration uses third-party custom
+  elements, which Salesforce does not support under Lightning Locker. Validate
+  the final bundle in an LWS-enabled org before claiming compatibility.
+- **CRUD/FLS**: `ForceCalendarController` uses `WITH USER_MODE`
   on queries and explicit `isCreateable/isUpdateable/isDeletable` checks
-  before DML.
+  before explicit user-mode DML, which also enforces write FLS and access to
+  related records. Restricted-user verification in an org remains required.
 - **Zero third-party JavaScript**: the static resource contains only
   @forcecalendar code (MIT, same author). Supply-chain review is one
   package family. Public audit page: audit.forcecalendar.org.
@@ -52,7 +53,7 @@ The review focuses on exactly what this project was engineered for:
 **Title**: forceCalendar — Native Calendar for Lightning
 
 **Tagline**: An accessible, drag-and-drop calendar for the standard Event
-object. Zero third-party code, MIT licensed, Locker/LWS native.
+object. MIT licensed, requires Lightning Web Security.
 
 **Description**:
 forceCalendar is an open-source calendar built specifically for the
@@ -66,7 +67,7 @@ handling, and ICS import/export.
 - Drag events to move or resize; drag empty grid to create
 - Accessible by default: keyboard navigation and screen-reader labels
 - Zero third-party JavaScript — one MIT-licensed codebase to review
-- Respects sharing and FLS (`WITH SECURITY_ENFORCED`, CRUD checks)
+- Enforces sharing, secured reads and user-mode writes; verify permissions in the target org
 - Open source: github.com/forceCalendar — public benchmarks and security audit
 
 **Categories**: Productivity; Calendar & Scheduling

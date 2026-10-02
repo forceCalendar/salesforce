@@ -4,29 +4,53 @@ import FORCECALENDAR_LIB from '@salesforce/resourceUrl/forcecalendar';
 
 export default class ForceCalendarDemo extends LightningElement {
     _libraryLoaded = false;
+    _libraryLoadPromise;
     _calendarElement = null;
-    _isInitialized = false;
+    _sampleEventsTimer;
 
     async connectedCallback() {
         if (!this._libraryLoaded) {
             try {
-                await loadScript(this, FORCECALENDAR_LIB);
+                // Reconnecting while the resource is pending shares one load.
+                if (!this._libraryLoadPromise) {
+                    this._libraryLoadPromise = loadScript(this, FORCECALENDAR_LIB);
+                }
+                await this._libraryLoadPromise;
                 this._libraryLoaded = true;
             } catch (err) {
                 console.error('Failed to load ForceCalendar library:', err);
+            } finally {
+                this._libraryLoadPromise = undefined;
             }
+        }
+        // Resolving loadScript does not itself schedule an LWC render.
+        if (this.isConnected && this._libraryLoaded) {
+            this._initCalendar();
         }
     }
 
     renderedCallback() {
-        if (this._isInitialized || !this._libraryLoaded) {
+        if (this._calendarElement || !this._libraryLoaded) {
             return;
         }
-        this._isInitialized = true;
         this._initCalendar();
     }
 
+    disconnectedCallback() {
+        this._cancelSampleEvents();
+        if (this._calendarElement) {
+            const container = this.template.querySelector('.calendar-container');
+            if (container && this._calendarElement.parentNode === container) {
+                container.removeChild(this._calendarElement);
+            }
+            this._calendarElement = null;
+        }
+    }
+
     _initCalendar() {
+        if (!this.isConnected || this._calendarElement) {
+            return;
+        }
         const container = this.template.querySelector('.calendar-container');
         if (!container) {
             return;
@@ -48,10 +72,29 @@ export default class ForceCalendarDemo extends LightningElement {
 
         container.appendChild(this._calendarElement);
 
-        // Load sample events after a short delay so the element has time to mount
+        this._scheduleSampleEvents();
+    }
+
+    _cancelSampleEvents() {
+        if (this._sampleEventsTimer !== undefined) {
+            clearTimeout(this._sampleEventsTimer);
+            this._sampleEventsTimer = undefined;
+        }
+    }
+
+    _scheduleSampleEvents() {
+        this._cancelSampleEvents();
+        const calendar = this._calendarElement;
+        if (!this.isConnected || !calendar) {
+            return;
+        }
+        // Keep the demo's short mount delay, with only one pending sample load.
         // eslint-disable-next-line @lwc/lwc/no-async-operation
-        setTimeout(() => {
-            this._loadSampleEvents();
+        this._sampleEventsTimer = setTimeout(() => {
+            this._sampleEventsTimer = undefined;
+            if (this.isConnected && this._calendarElement === calendar) {
+                this._loadSampleEvents();
+            }
         }, 100);
     }
 
@@ -98,26 +141,16 @@ export default class ForceCalendarDemo extends LightningElement {
             return;
         }
         const events = this._generateSampleEvents();
-        events.forEach(event => {
-            this._calendarElement.addEvent(event);
-        });
+        this._calendarElement.setEvents(events);
         console.log('Loaded ' + events.length + ' sample events');
     }
 
     _clearEvents() {
+        this._cancelSampleEvents();
         if (!this._calendarElement) {
             return;
         }
-        const events = this._calendarElement.getEvents
-            ? this._calendarElement.getEvents()
-            : [];
-        if (events && events.length > 0) {
-            events.forEach(evt => {
-                if (this._calendarElement.deleteEvent) {
-                    this._calendarElement.deleteEvent(evt.id);
-                }
-            });
-        }
+        this._calendarElement.setEvents([]);
     }
 
     handleAddEvent() {
@@ -141,10 +174,7 @@ export default class ForceCalendarDemo extends LightningElement {
 
     handleLoadSampleEvents() {
         this._clearEvents();
-        // eslint-disable-next-line @lwc/lwc/no-async-operation
-        setTimeout(() => {
-            this._loadSampleEvents();
-        }, 100);
+        this._scheduleSampleEvents();
     }
 
     handleSetMonthView() {

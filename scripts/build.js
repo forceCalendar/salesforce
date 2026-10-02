@@ -153,7 +153,7 @@ function copyRecursive(src, dest) {
         const srcPath = path.join(src, entry.name);
         const destPath = path.join(dest, entry.name);
 
-        if (entry.name === 'node_modules' || entry.name === 'package.json' || entry.name === 'package-lock.json') {
+        if (['node_modules', '__tests__', '__mocks__', 'package.json', 'package-lock.json'].includes(entry.name)) {
             continue;
         }
 
@@ -171,6 +171,7 @@ function createPackageXml(distDir) {
     <types>
         <members>ForceCalendarController</members>
         <members>ForceCalendarControllerTest</members>
+        <members>ForceCalendarPermissionsTest</members>
         <name>ApexClass</name>
     </types>
     <types>
@@ -181,6 +182,12 @@ function createPackageXml(distDir) {
         <members>forceCalendar</members>
         <members>forceCalendarDemo</members>
         <name>LightningComponentBundle</name>
+    </types>
+    <types>
+        <members>ForceCalendarAccess</members>
+        <members>ForceCalendarReader</members>
+        <members>ForceCalendarEditor</members>
+        <name>PermissionSet</name>
     </types>
     <version>62.0</version>
 </Package>`;

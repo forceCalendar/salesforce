@@ -21,13 +21,13 @@ jobs:
         node-version: '20'
 
     - name: Install root dependencies
-      run: npm install
+      run: npm ci
 
     - name: Install src dependencies
-      run: cd src && npm install
+      run: cd src && npm ci
 
-    - name: Build distribution
-      run: npm run build
+    - name: Build and test distribution
+      run: npm test
 
     - name: Create deployment package
       run: |
@@ -71,7 +71,7 @@ jobs:
           - ForceCalendar LWC with Apex data layer
           - ForceCalendarDemo component with sample events
           - Apex tests for ForceCalendarController
-          - Compatible with Locker Service and Lightning Web Security
+          - Requires Lightning Web Security for third-party custom elements
 
         generate_release_notes: true
       env:

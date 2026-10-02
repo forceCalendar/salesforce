@@ -5,11 +5,18 @@
   "description": "ForceCalendar Salesforce LWC - Build tools only",
   "type": "module",
   "scripts": {
-    "build": "node scripts/build.js"
+    "build": "node scripts/build.js",
+    "test": "npm run build && cd src && ../node_modules/.bin/sfdx-lwc-jest -- --runInBand"
   },
   "devDependencies": {
     "@rollup/plugin-node-resolve": "^15.3.0",
-    "@rollup/plugin-terser": "^0.4.4",
+    "@rollup/plugin-terser": "^1.0.0",
+    "@salesforce/sfdx-lwc-jest": "^7.9.0",
     "rollup": "^4.0.0"
+  },
+  "overrides": {
+    "@lwc/state-test-utils": {
+      "vitest": "^4.1.11"
+    }
   }
 }

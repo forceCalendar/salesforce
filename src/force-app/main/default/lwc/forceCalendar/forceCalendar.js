@@ -5,23 +5,45 @@ import { ShowToastEvent } from 'lightning/platformShowToastEvent';
 import FORCECALENDAR_LIB from '@salesforce/resourceUrl/forcecalendar';
 
 import getEvents from '@salesforce/apex/ForceCalendarController.getEvents';
-import createEvent from '@salesforce/apex/ForceCalendarController.createEvent';
-import updateEvent from '@salesforce/apex/ForceCalendarController.updateEvent';
+import createEvent from '@salesforce/apex/ForceCalendarController.createCalendarEvent';
+import updateEvent from '@salesforce/apex/ForceCalendarController.updateCalendarEvent';
 import deleteEvent from '@salesforce/apex/ForceCalendarController.deleteEvent';
 
 export default class ForceCalendar extends LightningElement {
     @api currentView = 'month';
     @api height = '800px';
-    @api recordId;
-    @api readOnly = false;
+    @api recordId = null;
+    _readOnly = false;
+
+    @api
+    get readOnly() {
+        return this._readOnly;
+    }
+
+    set readOnly(value) {
+        this._readOnly = value === true || value === 'true';
+        if (this._calendarElement) {
+            this._calendarElement.readOnly = this._readOnly;
+        }
+    }
 
     _libraryLoaded = false;
+    _libraryLoadPromise;
     _calendarElement = null;
     _isLoading = false;
     _error;
+    _currentDate;
     _startDateTime;
     _endDateTime;
     _wiredEventResult;
+    _serverEvents = [];
+    _snapshotContext;
+    _pendingWrites = [];
+    _writeQueues = new Map();
+    _createdIds = new Map();
+    _queueKeys = new Map();
+    _failedCreates = new Set();
+    _connectionRevision = 0;
 
     // --- Lifecycle ---
 
@@ -29,11 +51,22 @@ export default class ForceCalendar extends LightningElement {
         this._calculateDateRange();
         if (!this._libraryLoaded) {
             try {
-                await loadScript(this, FORCECALENDAR_LIB);
+                // A quick detach/reconnect must not start a competing load.
+                if (!this._libraryLoadPromise) {
+                    this._libraryLoadPromise = loadScript(this, FORCECALENDAR_LIB);
+                }
+                await this._libraryLoadPromise;
                 this._libraryLoaded = true;
             } catch (err) {
                 this._error = 'Failed to load calendar library';
+            } finally {
+                this._libraryLoadPromise = undefined;
             }
+        }
+        // Loading a static resource does not itself schedule an LWC render.
+        // The first renderedCallback may have run while loadScript was pending.
+        if (this.isConnected && this._libraryLoaded) {
+            this._initCalendar();
         }
     }
 
@@ -45,6 +78,7 @@ export default class ForceCalendar extends LightningElement {
     }
 
     disconnectedCallback() {
+        this._connectionRevision += 1;
         if (this._calendarElement) {
             const container = this.template.querySelector('.calendar-container');
             if (container && this._calendarElement.parentNode === container) {
@@ -56,17 +90,23 @@ export default class ForceCalendar extends LightningElement {
 
     // --- Wire: fetch events from Apex ---
 
+    get recordContextId() {
+        // Apex wires do not run when a parameter is undefined. App and Home
+        // pages intentionally pass null to fetch the user's unfiltered events.
+        return this.recordId || null;
+    }
+
     @wire(getEvents, {
         startDateTime: '$_startDateTime',
         endDateTime: '$_endDateTime',
-        recordId: '$recordId'
+        recordId: '$recordContextId'
     })
     _wiredEvents(result) {
         this._wiredEventResult = result;
         const { error, data } = result;
 
         if (data) {
-            this._isLoading = false;
+            this._isLoading = this._pendingWrites.length > 0;
             this._error = undefined;
             this._loadEventsIntoCalendar(data);
         } else if (error) {
@@ -79,6 +119,9 @@ export default class ForceCalendar extends LightningElement {
     // --- Calendar initialization ---
 
     _initCalendar() {
+        if (this._calendarElement) {
+            return;
+        }
         const container = this.template.querySelector('.calendar-container');
         if (!container) {
             return;
@@ -88,9 +131,15 @@ export default class ForceCalendar extends LightningElement {
         const tag = ['forcecal', 'main'].join('-');
         this._calendarElement = document.createElement(tag);
         this._calendarElement.setAttribute('view', this.currentView);
+        if (this._currentDate) {
+            this._calendarElement.setAttribute('date', this._currentDate.toISOString());
+        }
         // Native platform look by default (SLDS token preset)
         this._calendarElement.setAttribute('theme', 'slds');
+        // Standard Salesforce Event has no mapped persistent color field.
+        this._calendarElement.setAttribute('show-color-picker', 'false');
         this._calendarElement.setAttribute('height', this.height);
+        this._calendarElement.readOnly = this.readOnly;
 
         // Navigation events
         this._calendarElement.addEventListener('calendar-navigate', (e) => {
@@ -137,71 +186,43 @@ export default class ForceCalendar extends LightningElement {
     }
 
     _loadEventsIntoCalendar(data) {
-        if (!this._calendarElement) {
-            return;
-        }
+        this._snapshotContext = this._writeContext();
+        // Apex results are snapshots, not user commands. addEvent/deleteEvent
+        // emit lifecycle callbacks that would write the loaded records to Apex.
+        this._serverEvents = data.map(event => ({
+            id: event.id,
+            title: event.title || 'Untitled Event',
+            start: event.allDay ? this._civilDate(event.startDate || String(event.start).slice(0, 10)) : new Date(event.start),
+            end: event.allDay ? this._civilDate(event.lastDay || String(event.end).slice(0, 10), true) : new Date(event.end),
+            allDay: event.allDay || false,
+            description: event.description || '',
+            location: event.location || '',
+            color: event.backgroundColor || '#0176D3',
+            metadata: { forceCalendarRecurring: event.recurring === true }
+        }));
+        this._renderConfirmedAndPending();
+    }
 
-        // Clear existing events
-        const existing = this._calendarElement.getEvents
-            ? this._calendarElement.getEvents()
-            : [];
-        if (existing && existing.length > 0) {
-            existing.forEach(evt => {
-                if (this._calendarElement.deleteEvent) {
-                    this._calendarElement.deleteEvent(evt.id);
-                }
-            });
-        }
+    _civilDate(value, endOfDay = false) {
+        const [year, month, day] = String(value).split('-').map(Number);
+        return new Date(year, month - 1, day, endOfDay ? 23 : 0,
+            endOfDay ? 59 : 0, endOfDay ? 59 : 0, endOfDay ? 999 : 0);
+    }
 
-        // Add all events from Salesforce
-        data.forEach(event => {
-            this._calendarElement.addEvent({
-                id: event.id,
-                title: event.title || 'Untitled Event',
-                start: new Date(event.start),
-                end: new Date(event.end),
-                allDay: event.allDay || false,
-                description: event.description || '',
-                color: event.backgroundColor || '#0176D3'
-            });
-        });
+    _civilDateString(value) {
+        const date = new Date(value);
+        return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
     }
 
     // --- Date range calculation ---
 
     _calculateDateRange() {
-        const now = new Date();
-        const year = now.getFullYear();
-        const month = now.getMonth();
-        const date = now.getDate();
-
-        let start, end;
-
-        switch (this.currentView) {
-            case 'week': {
-                const day = now.getDay();
-                start = new Date(year, month, date - day - 7);
-                end = new Date(year, month, date + (6 - day) + 7);
-                break;
-            }
-            case 'day':
-                start = new Date(year, month, date - 1);
-                end = new Date(year, month, date + 1);
-                break;
-            default:
-                start = new Date(year, month - 1, 1);
-                end = new Date(year, month + 2, 0);
-        }
-
-        start.setHours(0, 0, 0, 0);
-        end.setHours(23, 59, 59, 999);
-
-        this._startDateTime = start.toISOString();
-        this._endDateTime = end.toISOString();
+        this._updateDateRangeForDate(this._currentDate || new Date(), this.currentView);
     }
 
     _updateDateRangeForDate(targetDate, view) {
         const d = new Date(targetDate);
+        this._currentDate = d;
         const year = d.getFullYear();
         const month = d.getMonth();
         const day = d.getDate();
@@ -251,79 +272,118 @@ export default class ForceCalendar extends LightningElement {
         if (detail.date) {
             this._updateDateRangeForDate(detail.date, this.currentView);
         } else if (detail.action === 'today') {
-            this._calculateDateRange();
+            this._updateDateRangeForDate(new Date(), this.currentView);
         }
     }
 
-    _handleEventCreate(detail) {
-        this._isLoading = true;
-        const eventData = detail.event || detail;
-        const startDt = eventData.start ? new Date(eventData.start) : new Date();
-        const endDt = eventData.end
-            ? new Date(eventData.end)
-            : new Date(startDt.getTime() + 60 * 60 * 1000);
+    _writeContext() {
+        return JSON.stringify([this.recordId || null, this._startDateTime,
+            this._endDateTime, this._connectionRevision]);
+    }
 
-        createEvent({
-            title: eventData.title || 'New Event',
-            startDateTime: startDt.toISOString(),
-            endDateTime: endDt.toISOString(),
-            isAllDay: eventData.allDay || false,
-            description: eventData.description || ''
-        })
-            .then(() => {
-                this._showToast('Success', 'Event created', 'success');
-                this.dispatchEvent(new CustomEvent('eventcreate', { detail: eventData }));
-                return refreshApex(this._wiredEventResult);
-            })
-            .catch(error => {
-                this._showToast('Error creating event', this._extractErrorMessage(error), 'error');
-            })
-            .finally(() => {
-                this._isLoading = false;
-            });
+    _renderConfirmedAndPending() {
+        if (!this._calendarElement || this._snapshotContext !== this._writeContext()) return;
+        const events = new Map(this._serverEvents.map(event => [event.id, event]));
+        // Preserve newer optimistic changes while another request or wire refresh
+        // settles. Snapshot replacement never emits a persistence command.
+        for (const write of this._pendingWrites) {
+            if (write.context !== this._snapshotContext) continue;
+            const id = this._createdIds.get(write.key) || write.event.id;
+            if (write.kind === 'delete') events.delete(id);
+            else events.set(id, { ...write.event, id });
+        }
+        this._calendarElement.setEvents([...events.values()]);
+    }
+
+    _handleEventCreate(detail) {
+        this._queueWrite('create', detail.event || detail);
     }
 
     _handleEventUpdate(detail) {
-        this._isLoading = true;
-        const eventData = detail.event || detail;
-
-        updateEvent({
-            eventId: eventData.id,
-            title: eventData.title,
-            startDateTime: eventData.start ? new Date(eventData.start).toISOString() : null,
-            endDateTime: eventData.end ? new Date(eventData.end).toISOString() : null,
-            isAllDay: eventData.allDay,
-            description: eventData.description
-        })
-            .then(() => {
-                this._showToast('Success', 'Event updated', 'success');
-                this.dispatchEvent(new CustomEvent('eventupdate', { detail: eventData }));
-                return refreshApex(this._wiredEventResult);
-            })
-            .catch(error => {
-                this._showToast('Error updating event', this._extractErrorMessage(error), 'error');
-            })
-            .finally(() => {
-                this._isLoading = false;
-            });
+        this._queueWrite('update', detail.event || detail);
     }
 
     _handleEventDelete(detail) {
-        this._isLoading = true;
-        const eventId = detail.eventId || detail.id || (detail.event && detail.event.id);
+        this._queueWrite('delete', { id: detail.eventId || detail.id || detail.event?.id });
+    }
 
-        deleteEvent({ eventId })
-            .then(() => {
-                this._showToast('Success', 'Event deleted', 'success');
-                this.dispatchEvent(new CustomEvent('eventdelete', { detail: { eventId } }));
-                return refreshApex(this._wiredEventResult);
-            })
-            .catch(error => {
-                this._showToast('Error deleting event', this._extractErrorMessage(error), 'error');
-            })
-            .finally(() => {
-                this._isLoading = false;
-            });
+    _queueWrite(kind, eventData) {
+        if (this.readOnly) return;
+        const event = { ...eventData };
+        const context = this._writeContext();
+        const eventKey = JSON.stringify([this.recordId || null, event.id]);
+        const key = this._queueKeys.get(eventKey) || eventKey;
+        const write = { kind, event, context, key, recordId: this.recordId || null };
+        this._pendingWrites.push(write);
+        this._isLoading = true;
+        // Serialize writes to the same record. Otherwise an older server request
+        // could finish last and overwrite a newer user edit. Other records remain
+        // independent, and navigation never changes the write's record context.
+        const previous = this._writeQueues.get(key) || Promise.resolve();
+        const task = previous.then(() => this._persistWrite(write));
+        this._writeQueues.set(key, task);
+        task.finally(() => {
+            if (this._writeQueues.get(key) === task) this._writeQueues.delete(key);
+        });
+    }
+
+    async _persistWrite(write) {
+        const { kind, event, key } = write;
+        const verb = { create: 'creating', update: 'updating', delete: 'deleting' }[kind];
+        let savedId;
+        try {
+            if (kind !== 'create' && this._failedCreates.has(key)) {
+                throw new Error('This event was not created. Refresh and create it again.');
+            }
+            const id = this._createdIds.get(key) || event.id;
+            if (kind === 'delete') {
+                await deleteEvent({ eventId: id });
+            } else {
+                const start = event.start ? new Date(event.start) : new Date();
+                const end = event.end ? new Date(event.end) : new Date(start.getTime() + 3600000);
+                const values = {
+                    title: kind === 'create' ? event.title || 'New Event' : event.title,
+                    startDateTime: event.allDay ? null : (kind === 'create' || event.start ? start.toISOString() : null),
+                    endDateTime: event.allDay ? null : (kind === 'create' || event.end ? end.toISOString() : null),
+                    startDate: event.allDay ? this._civilDateString(start) : null,
+                    lastDay: event.allDay ? this._civilDateString(end) : null,
+                    isAllDay: kind === 'create' ? event.allDay || false : event.allDay,
+                    description: kind === 'create' ? event.description || '' : event.description,
+                    location: kind === 'create' ? event.location || '' : event.location
+                };
+                if (kind === 'create') {
+                    savedId = await createEvent({ ...values, recordId: write.recordId });
+                    this._createdIds.set(key, savedId);
+                    this._queueKeys.set(JSON.stringify([write.recordId, savedId]), key);
+                    this._failedCreates.delete(key);
+                } else await updateEvent({ ...values, eventId: id });
+            }
+            if (write.context === this._writeContext() && this._snapshotContext === write.context) {
+                const confirmedId = savedId || id;
+                this._serverEvents = this._serverEvents.filter(value => value.id !== event.id && value.id !== confirmedId);
+                if (kind !== 'delete') this._serverEvents.push({ ...event, id: confirmedId });
+            }
+            this._showToast('Success', `Event ${{ create: 'created', update: 'updated', delete: 'deleted' }[kind]}`, 'success');
+            this.dispatchEvent(new CustomEvent(`event${kind}`, {
+                detail: kind === 'delete' ? { eventId: id } : { ...event, id: savedId || id }
+            }));
+        } catch (error) {
+            if (kind === 'create') this._failedCreates.add(key);
+            this._showToast(`Error ${verb} event`, this._extractErrorMessage(error), 'error');
+        } finally {
+            this._pendingWrites = this._pendingWrites.filter(value => value !== write);
+            this._renderConfirmedAndPending();
+            this._isLoading = this._pendingWrites.length > 0;
+        }
+        // Refresh failures are distinct from write failures: a committed write
+        // must not be reported as rejected, nor retried/duplicated automatically.
+        if (this.isConnected && this._wiredEventResult) {
+            try {
+                await refreshApex(this._wiredEventResult);
+            } catch (error) {
+                this._showToast('Calendar refresh failed', this._extractErrorMessage(error), 'error');
+            }
+        }
     }
 
     // --- Public API ---
@@ -339,7 +399,7 @@ export default class ForceCalendar extends LightningElement {
 
     @api
     addEvent(event) {
-        if (this._calendarElement) {
+        if (this._calendarElement && !this.readOnly) {
             this._calendarElement.addEvent(event);
         }
     }
