@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<PermissionSet xmlns="http://soap.sforce.com/2006/04/metadata">
+    <classAccesses>
+        <apexClass>ForceCalendarController</apexClass>
+        <enabled>true</enabled>
+    </classAccesses>
+    <description>Grants access to the ForceCalendar Apex controller only. Administrators must separately grant required Event object and field permissions and related-record access. No permissions are assigned automatically.</description>
+    <label>ForceCalendar Access</label>
+</PermissionSet>
